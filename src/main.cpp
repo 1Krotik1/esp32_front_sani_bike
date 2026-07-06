@@ -24,8 +24,8 @@ void drawBattery1Prime() {
     tft.drawLine(10, 35, 7, 38, TFT_WHITE);
 }
 
-void drawBattery1ToMainLineVoltage() {
-    tft.drawLine(30, 30, 30, 44, TFT_RED);
+void drawBattery1ToMainLineVoltage(const uint32_t color) {
+    tft.drawLine(30, 30, 30, 44, color);
 }
 
 // --- Отрисовка индикатора батареи 2 ---
@@ -40,8 +40,8 @@ void drawBattery2(const uint32_t color) {
     
 }
 
-void drawBattery2ToMainLineVoltage() {
-    tft.drawLine(60, 30, 60, 44, TFT_GREEN);
+void drawBattery2ToMainLineVoltage(const uint32_t color ) {
+    tft.drawLine(60, 30, 60, 44, color);
 }
 
 void drawBattery2Prime() {
@@ -66,13 +66,13 @@ void drawMainLineCurrent(const char* value) {
 }
 
 // --- Отрисовка линии от тока к APU ---
-void drawMainLineCurrentToApuLine() {
-    tft.drawLine(45, 85, 45, 99, TFT_RED);
+void drawMainLineCurrentToApuLine(const uint32_t color) {
+    tft.drawLine(45, 85, 45, 99, color);
 }
 
 // --- Отрисовка индикатора APU ---
-void drawApu() {
-    tft.drawRect(30, 100, 30, 20, TFT_RED);
+void drawApu(const uint32_t color) {
+    tft.drawRect(30, 100, 30, 20, color);
     tft.setTextSize(0);
     tft.setCursor(36, 106);
     tft.println("APU");
@@ -113,11 +113,15 @@ void drawWarning(const char* message) {
 // --- Отрисовка всего экрана ---
 void drawScreen() {
     drawBattery1(TFT_RED);
+    drawBattery1ToMainLineVoltage(TFT_RED);
+    drawBattery1Prime();
     drawBattery2(TFT_GREEN);
+    drawBattery2ToMainLineVoltage(TFT_GREEN);
+    drawBattery2Prime();
     drawMainLineVoltage("12.50V");
     drawMainLineCurrent("1.25A");
-    drawMainLineCurrentToApuLine();
-    drawApu();
+    drawMainLineCurrentToApuLine(TFT_RED);
+    drawApu(TFT_RED);
     drawSpeedometer("??");
     drawCriticalError("critical error");
     drawWarning("warning");
