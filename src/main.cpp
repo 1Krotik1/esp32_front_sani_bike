@@ -1,7 +1,18 @@
 #include <TFT_eSPI.h>
 #include "Saninokia.h"
 #include "protocol_can.h"
+#include <Arduino.h>
+
+#define CAN_2515
+#include <SPI.h>
+#include <mcp2515_can.h>
+mcp2515_can CAN(MCP2515_CS_PIN);
+
 TFT_eSPI tft = TFT_eSPI();
+
+// --- MCP2515 CAN ---
+#define MCP2515_CS_PIN    17
+#define MCP2515_INT_PIN   16
 
 
 
@@ -17,13 +28,13 @@ void drawBattery1(const uint32_t color) {
 
     
 }
-
+// --- Отрисовка стрелки приоритета батареи 1 ---
 void drawBattery1Prime() {
     tft.drawLine(10, 35, 10, 44, TFT_WHITE);
     tft.drawLine(10, 35, 13, 38, TFT_WHITE);
     tft.drawLine(10, 35, 7, 38, TFT_WHITE);
 }
-
+// --- Отрисовка линии от батареи 1 к шине ---
 void drawBattery1ToMainLineVoltage(const uint32_t color) {
     tft.drawLine(30, 30, 30, 44, color);
 }
@@ -40,16 +51,18 @@ void drawBattery2(const uint32_t color) {
     
 }
 
+// --- Отрисовка линии от батареи 2 к шине ---
 void drawBattery2ToMainLineVoltage(const uint32_t color ) {
     tft.drawLine(60, 30, 60, 44, color);
 }
 
+// --- Отрисовка стрелки приоритета батареи 2 ---
 void drawBattery2Prime() {
     tft.drawLine(80, 35, 80, 44, TFT_WHITE);
     tft.drawLine(80, 35, 83, 38, TFT_WHITE);
     tft.drawLine(80, 35, 77, 38, TFT_WHITE);
 }
-// --- Отрисовка напряжения ---
+// --- Отрисовка напряжения главной шины ---
 void drawMainLineVoltage(const char* value) {
     tft.drawRect(23, 45, 43, 20, TFT_GREEN);
     tft.setTextSize(0);
@@ -57,7 +70,7 @@ void drawMainLineVoltage(const char* value) {
     tft.println(value);
 }
 
-// --- Отрисовка тока ---
+// --- Отрисовка тока главной шины ---
 void drawMainLineCurrent(const char* value) {
     tft.drawRect(23, 65, 43, 20, TFT_GREEN);
     tft.setTextSize(0);
@@ -65,13 +78,10 @@ void drawMainLineCurrent(const char* value) {
     tft.println(value);
 }
 
-// --- Отрисовка линии от тока к APU ---
-void drawMainLineCurrentToApuLine(const uint32_t color) {
-    tft.drawLine(45, 85, 45, 99, color);
-}
 
 // --- Отрисовка индикатора APU ---
 void drawApu(const uint32_t color) {
+    tft.drawLine(45, 85, 45, 99, color);
     tft.drawRect(30, 100, 30, 20, color);
     tft.setTextSize(0);
     tft.setCursor(36, 106);
@@ -120,11 +130,39 @@ void drawScreen() {
     drawBattery2Prime();
     drawMainLineVoltage("12.50V");
     drawMainLineCurrent("1.25A");
-    drawMainLineCurrentToApuLine(TFT_RED);
     drawApu(TFT_RED);
     drawSpeedometer("??");
     drawCriticalError("critical error");
     drawWarning("warning");
+}
+
+// --- Обработка входящего CAN-сообщения ---
+void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
+    CanId canId = (CanId)id;
+    switch (canId) {
+        case CAN_ID_STATUS_DATA: {
+            const StatusData* statusData = (const StatusData*)data;
+            // Обработка данных статуса
+            break;
+        }
+        case CAN_ID_MAIN_LINE_DATA: {
+            const MainLineData* mainLineData = (const MainLineData*)data;
+            // Обработка данных главной шины
+            break;
+        }
+        case CAN_ID_BATTERY1_DATA: {
+            const Battery1Data* battery1Data = (const Battery1Data*)data;
+            // Обработка данных батареи 1
+            break;
+        }
+        case CAN_ID_BATTERY2_DATA: {
+            const Battery2Data* battery2Data = (const Battery2Data*)data;
+            // Обработка данных батареи 2
+            break;
+        }
+        default:
+            break;
+    }
 }
 
 void setup() {
@@ -132,16 +170,42 @@ void setup() {
     tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
 
-    // tft.setSwapBytes(true); // ВАЖНО: меняет порядок байт (Big/Little Endian)
-    // tft.pushImage(0, 0, Saninokia_w, Saninokia_h, Saninokia);
-    // delay(10000); // Пауза для просмотра изображения
-    // tft.fillScreen(TFT_BLACK);
-    // tft.setSwapBytes(false); // Вернуть к нормальному порядку байт для текста
+    // --- Инициализация MCP2515 ---
+    Serial.begin(115200);
+    Serial.println("MCP2515 CAN Bus Test");
+
+    // Настройка пинов
+    pinMode(MCP2515_CS_PIN, OUTPUT);
+    pinMode(MCP2515_INT_PIN, INPUT);
+
+    // Инициализация CAN (500 kbps)
+    for (int i = 0; i < 10; i++) {
+        if (CAN_OK == CAN.begin(CAN_500KBPS)) {
+            Serial.println("MCP2515 initialized successfully!");
+            break;
+        }
+        Serial.println("CAN init fail, retry...");
+        delay(100);
+    }
+    // Настройка фильтров (приём всех сообщений)
+    for (int i = 0; i < 6; i++) {
+        CAN.init_Mask(i, 0, 0x7FF);
+        CAN.init_Filt(i, 0, 0x000);
+    }
 
     drawScreen();
 }
 
 void loop() {
-    // Пустой цикл, изображение уже выведено в setup()
-    delay(1000);
+    // Обработка входящих CAN-сообщений
+    if (CAN_MSGAVAIL == CAN.checkReceive()) {
+        uint32_t id;
+        uint8_t len;
+        byte buf[8];
+        CAN.readMsgBuf(&len, buf);
+        id = CAN.getCanId();
+        handleCanMessage(id, buf, len);
+    }
+
+    delay(10);
 }

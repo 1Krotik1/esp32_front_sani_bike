@@ -1,0 +1,22 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build",
+			"type": "shell",
+			"command": "pio run",
+			"group": "build"
+		},
+		{
+			"label": "Build",
+			"type": "shell",
+			"command": "pio run",
+			"group": "build"
+		},
+		{
+			"label": "Build",
+			"type": "shell",
+			"command": "pio run"
+		}
+	]
+}
