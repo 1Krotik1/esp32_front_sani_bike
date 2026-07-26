@@ -3,16 +3,20 @@
 #include "protocol_can.h"
 #include <Arduino.h>
 
-#define CAN_2515
-#include <SPI.h>
-#include <mcp2515_can.h>
-mcp2515_can CAN(MCP2515_CS_PIN);
-
-TFT_eSPI tft = TFT_eSPI();
-
 // --- MCP2515 CAN ---
 #define MCP2515_CS_PIN    17
 #define MCP2515_INT_PIN   16
+
+#include <SPI.h>
+#include <mcp_can.h>
+MCP_CAN CAN(MCP2515_CS_PIN);
+bool canInitialized = false;
+uint32_t canRxCount = 0;
+uint32_t canLastDiagMs = 0;
+uint32_t canLastTxTestMs = 0;
+constexpr bool kEnableCanTxTest = false;
+
+TFT_eSPI tft = TFT_eSPI();
 
 
 
@@ -22,7 +26,7 @@ void drawBattery1(const uint32_t color) {
     tft.drawRect(5, 10, 30, 20, color);
     tft.setTextSize(0);
     tft.setCursor(9, 16);
-    tft.println("BAT1");
+    tft.println("БАТ1");
 
     
 
@@ -44,7 +48,7 @@ void drawBattery2(const uint32_t color) {
     tft.drawRect(55, 10, 30, 20, color);
     tft.setTextSize(0);
     tft.setCursor(59, 16);
-    tft.println("BAT2");
+    tft.println("БАТ2");
 
     
 
@@ -85,7 +89,7 @@ void drawApu(const uint32_t color) {
     tft.drawRect(30, 100, 30, 20, color);
     tft.setTextSize(0);
     tft.setCursor(36, 106);
-    tft.println("APU");
+    tft.println("ВСУ");
 }
 
 // --- Отрисовка спидометра ---
@@ -95,7 +99,7 @@ void drawSpeedometer(const char* speedValue) {
     tft.setTextSize(3);
     tft.print(speedValue);
     tft.setTextSize(0);
-    tft.println("km/h");
+    tft.println("км/ч");
 }
 
 // --- Отрисовка критической ошибки ---
@@ -132,35 +136,73 @@ void drawScreen() {
     drawMainLineCurrent("1.25A");
     drawApu(TFT_RED);
     drawSpeedometer("??");
-    drawCriticalError("critical error");
-    drawWarning("warning");
+    drawCriticalError("критическая ошибка");
+    drawWarning("предупреждение");
+}
+
+void printCanErrorFlags(const uint8_t errFlags) {
+    if (errFlags == 0) {
+        Serial.println("CAN eflg: none");
+        return;
+    }
+
+    if (errFlags & 0x20) Serial.println("CAN eflg: TXBO");
+    if (errFlags & 0x10) Serial.println("CAN eflg: TXEP");
+    if (errFlags & 0x08) Serial.println("CAN eflg: RXEP");
+    if (errFlags & 0x04) Serial.println("CAN eflg: TXWAR");
+    if (errFlags & 0x02) Serial.println("CAN eflg: RXWAR");
+    if (errFlags & 0x01) Serial.println("CAN eflg: EWARN");
 }
 
 // --- Обработка входящего CAN-сообщения ---
 void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
+    Serial.printf("CAN RX: id=0x%03lX len=%u\n", id, len);
     CanId canId = (CanId)id;
     switch (canId) {
         case CAN_ID_STATUS_DATA: {
+            if (len < sizeof(StatusData)) {
+                Serial.printf("CAN STATUS_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(StatusData));
+                break;
+            }
             const StatusData* statusData = (const StatusData*)data;
-            // Обработка данных статуса
+            Serial.printf(
+                "STATUS: main=%u bat1=%u bat2=%u apu=%u\n",
+                statusData->status_main_line,
+                statusData->status_battery1,
+                statusData->status_battery2,
+                statusData->status_apu
+            );
             break;
         }
         case CAN_ID_MAIN_LINE_DATA: {
+            if (len < sizeof(MainLineData)) {
+                Serial.printf("CAN MAIN_LINE_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(MainLineData));
+                break;
+            }
             const MainLineData* mainLineData = (const MainLineData*)data;
-            // Обработка данных главной шины
+            Serial.printf("MAIN_LINE: voltage=%u current=%u\n", mainLineData->voltage, mainLineData->current);
             break;
         }
         case CAN_ID_BATTERY1_DATA: {
+            if (len < sizeof(Battery1Data)) {
+                Serial.printf("CAN BATTERY1_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(Battery1Data));
+                break;
+            }
             const Battery1Data* battery1Data = (const Battery1Data*)data;
-            // Обработка данных батареи 1
+            Serial.printf("BATTERY1: voltage=%u\n", battery1Data->voltage);
             break;
         }
         case CAN_ID_BATTERY2_DATA: {
+            if (len < sizeof(Battery2Data)) {
+                Serial.printf("CAN BATTERY2_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(Battery2Data));
+                break;
+            }
             const Battery2Data* battery2Data = (const Battery2Data*)data;
-            // Обработка данных батареи 2
+            Serial.printf("BATTERY2: voltage=%u\n", battery2Data->voltage);
             break;
         }
         default:
+            Serial.printf("CAN unknown id=0x%03lX\n", id);
             break;
     }
 }
@@ -172,39 +214,86 @@ void setup() {
 
     // --- Инициализация MCP2515 ---
     Serial.begin(115200);
-    Serial.println("MCP2515 CAN Bus Test");
+    Serial.println("MCP2515 CAN Bus Test (physical bus)");
 
     // Настройка пинов
     pinMode(MCP2515_CS_PIN, OUTPUT);
     pinMode(MCP2515_INT_PIN, INPUT);
 
-    // Инициализация CAN (500 kbps)
-    for (int i = 0; i < 10; i++) {
-        if (CAN_OK == CAN.begin(CAN_500KBPS)) {
-            Serial.println("MCP2515 initialized successfully!");
+    // Инициализация CAN: пробуем 8 МГц и 16 МГц, чтобы выявить ошибку кварца/контроллера
+    const uint8_t clocks[] = {MCP_8MHZ, MCP_16MHZ};
+    const char* clockNames[] = {"8MHz", "16MHz"};
+    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+        if (CAN_OK == CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ))    {
+            Serial.printf("MCP2515 initialized successfully (500kbps, %s clock)\n", clockNames[attempt]);
+            canInitialized = true;
             break;
         }
-        Serial.println("CAN init fail, retry...");
+        Serial.printf("CAN init fail with %s, retry...\n", clockNames[attempt]);
         delay(100);
     }
-    // Настройка фильтров (приём всех сообщений)
-    for (int i = 0; i < 6; i++) {
-        CAN.init_Mask(i, 0, 0x7FF);
-        CAN.init_Filt(i, 0, 0x000);
+
+    if (!canInitialized) {
+        Serial.println("MCP2515 init failed after retries");
+    } else {
+        // Настройка фильтров на прием всех стандартных 11-битных ID.
+        CAN.init_Mask(0, 0, 0x000);
+        CAN.init_Mask(1, 0, 0x000);
+        for (int i = 0; i < 6; i++) {
+            CAN.init_Filt(i, 0, 0x000);
+        }
+
+        if (CAN.setMode(MCP_NORMAL) == CAN_OK) {
+            Serial.println("CAN mode set to MCP_NORMAL; waiting for physical bus traffic");
+        } else {
+            Serial.println("CAN mode change to MCP_NORMAL failed");
+        }
     }
 
     drawScreen();
 }
 
 void loop() {
+    if (!canInitialized) {
+        delay(200);
+        return;
+    }
+
     // Обработка входящих CAN-сообщений
-    if (CAN_MSGAVAIL == CAN.checkReceive()) {
-        uint32_t id;
-        uint8_t len;
-        byte buf[8];
-        CAN.readMsgBuf(&len, buf);
-        id = CAN.getCanId();
+    byte rxStatus = CAN.checkReceive();
+    if (CAN_MSGAVAIL == rxStatus) {
+        unsigned long id = 0;
+        uint8_t len = 0;
+        byte buf[8] = {0};
+        CAN.readMsgBuf(&id, &len, buf);
+        canRxCount++;
         handleCanMessage(id, buf, len);
+    }
+
+    // Периодический вывод состояния шины для диагностики отсутствия RX-кадров
+    const uint32_t nowMs = millis();
+    if (nowMs - canLastDiagMs >= 2000) {
+        canLastDiagMs = nowMs;
+        uint8_t errFlags = CAN.getError();
+        byte errStatus = CAN.checkError();
+        Serial.printf(
+            "CAN diag: rx=%lu INT=%u rxStatus=%u err=%u eflg=0x%02X\n",
+            (unsigned long)canRxCount,
+            (unsigned)digitalRead(MCP2515_INT_PIN),
+            (unsigned)rxStatus,
+            (unsigned)errStatus,
+            (unsigned)errFlags
+        );
+        printCanErrorFlags(errFlags);
+    }
+
+    // Тестовый TX-кадр отключён по умолчанию: на одиночной шине без ACK контроллер
+    // быстро уходит в TXBO. Для реальной проверки нужен хотя бы ещё один узел CAN.
+    if (kEnableCanTxTest && nowMs - canLastTxTestMs >= 1000) {
+        canLastTxTestMs = nowMs;
+        byte txData[1] = {0xA5};
+        byte txResult = CAN.sendMsgBuf(0x100, 0, 1, txData);
+        Serial.printf("CAN TX test: id=0x100 result=%u\n", (unsigned)txResult);
     }
 
     delay(10);
