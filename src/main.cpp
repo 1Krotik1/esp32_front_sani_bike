@@ -277,6 +277,9 @@ void loop() {
             (unsigned)errFlags
         );
         printCanErrorFlags(errFlags);
+        byte txData[1] = {0xA5};
+        byte txResult = CAN.sendMsgBuf(0x100, 0, 1, txData);
+        Serial.printf("CAN TX test: id=0x100 result=%u\n", (unsigned)txResult);
     }
 
     // Тестовый TX-кадр отключён по умолчанию: на одиночной шине без ACK контроллер
