@@ -212,35 +212,27 @@ void setup() {
     tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
 
-    // --- Инициализация MCP2515 ---
     Serial.begin(115200);
     Serial.println("MCP2515 CAN Bus Test (physical bus)");
 
-    // Настройка пинов
     pinMode(MCP2515_CS_PIN, OUTPUT);
     pinMode(MCP2515_INT_PIN, INPUT);
 
-    // Инициализация CAN: пробуем 8 МГц и 16 МГц, чтобы выявить ошибку кварца/контроллера
-    const uint8_t clocks[] = {MCP_8MHZ, MCP_16MHZ};
-    const char* clockNames[] = {"8MHz", "16MHz"};
-    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
-        if (CAN_OK == CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ))    {
-            Serial.printf("MCP2515 initialized successfully (500kbps, %s clock)\n", clockNames[attempt]);
-            canInitialized = true;
-            break;
-        }
-        Serial.printf("CAN init fail with %s, retry...\n", clockNames[attempt]);
-        delay(100);
+    // Кристалл 8 МГц
+    if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+        Serial.println("MCP2515 initialized successfully (500kbps, 8MHz clock)");
+        canInitialized = true;
+    } else {
+        Serial.println("MCP2515 init failed!");
+        canInitialized = false;
     }
 
-    if (!canInitialized) {
-        Serial.println("MCP2515 init failed after retries");
-    } else {
-        // Настройка фильтров на прием всех стандартных 11-битных ID.
-        CAN.init_Mask(0, 0, 0x000);
-        CAN.init_Mask(1, 0, 0x000);
+    if (canInitialized) {
+        // Принимаем все стандартные 11-битные ID
+        CAN.init_Mask(0, 0, 0x00000000);
+        CAN.init_Mask(1, 0, 0x00000000);
         for (int i = 0; i < 6; i++) {
-            CAN.init_Filt(i, 0, 0x000);
+            CAN.init_Filt(i, 0, 0x00000000);
         }
 
         if (CAN.setMode(MCP_NORMAL) == CAN_OK) {
