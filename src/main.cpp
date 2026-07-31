@@ -34,6 +34,10 @@ MainLineData currentMainLine;
 Battery1Data currentBat1;
 Battery2Data currentBat2;
 
+// --- Данные для дашборда (вычисляются из CAN) ---
+float currentSpeed = 0.0f; // Текущая скорость км/ч (0 — не реализовано)
+char timeStr[9] = "--:--"; // Время HH:MM (заглушка)
+
 enum ErrorState : uint8_t {
     ERR_OK = 0,
     ERR_WARNING,
@@ -50,6 +54,12 @@ bool useSprite = false; // true если спрайт создан успешн�
 // Макрос: рисовать на спрайте если он есть, иначе напрямую на tft
 #define DRAW (useSprite ? spr : tft)
 
+// --- Пороги защиты батарей (12В — 3S Li-ion) ---
+#define BAT_LOW_VOLTAGE      1050  // 10.50 В * 100 — предупреждение
+#define BAT_CRIT_VOLTAGE      900  // 9.00 В * 100 — критическое
+#define BAT_HIGH_VOLTAGE     1300  // 13.00 В * 100 — предупреждение
+#define BAT_OVER_VOLTAGE     1400  // 14.00 В * 100 — критическое
+
 // --- Цвет по статусу модуля ---
 uint32_t getStatusColor(uint8_t status) {
     if (status == INA226_OK || status == BAT_ADC_OK || status == APU_OK) return TFT_GREEN;
@@ -58,9 +68,14 @@ uint32_t getStatusColor(uint8_t status) {
     return TFT_YELLOW;
 }
 
-// --- Пороги защиты батарей ---
-#define BAT_UNDER_VOLTAGE  300  // 3.00 В * 100
-#define BAT_OVER_VOLTAGE   520  // 4.20 В * 100
+// --- Цвет батареи: учитывает статус ADC и напряжение ---
+uint32_t getBatteryColor(uint8_t status, uint16_t voltage) {
+    if (status == BAT_ADC_ERR_OPEN || status == BAT_ADC_ERR_OVER) return TFT_RED;
+    if (status != BAT_ADC_OK) return TFT_YELLOW;
+    if (voltage < BAT_CRIT_VOLTAGE || voltage > BAT_OVER_VOLTAGE) return TFT_RED;
+    if (voltage < BAT_LOW_VOLTAGE || voltage > BAT_HIGH_VOLTAGE) return TFT_YELLOW;
+    return TFT_GREEN;
+}
 
 // --- Отрисовка индикатора батареи 1 ---
 void drawBattery1(const uint32_t color) {
@@ -102,8 +117,6 @@ void drawBattery2(const uint32_t color) {
 void drawBattery2ToMainLineVoltage(const uint32_t color) {
     DRAW.drawLine(60, 30, 60, 44, color);
 }
-
-
 
 // --- Отрисовка напряжения главной шины ---
 void drawMainLineVoltage(const char* value, const uint32_t color) {
@@ -147,16 +160,17 @@ void drawSpeedometer(const char* speedValue, const uint32_t frameColor) {
     DRAW.println("km/h");
 }
 
-// --- Отрисовка ошибок (белый текст, цветная рамка) ---
+// --- Отрисовка ошибок ---
 void drawError(const char* message, const uint32_t frameColor) {
-    DRAW.fillRect(95, 0, 65, 40, TFT_BLACK);
-    DRAW.drawRect(95, 0, 65, 40, frameColor);
+    DRAW.fillRect(88, 0, 72, 40, TFT_BLACK);
+    DRAW.drawRect(88, 0, 72, 40, frameColor);
     DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
     DRAW.setTextSize(0);
-    DRAW.setCursor(99, 10);
+    DRAW.setCursor(91, 10);
     DRAW.println(message);
 }
-// --- Отрисовка времени от gps ---
+
+// --- Отрисовка времени ---
 void drawTime(const char* message, const uint32_t frameColor) {
     DRAW.fillRect(95, 41, 65, 40, TFT_BLACK);
     DRAW.drawRect(95, 41, 65, 40, frameColor);
@@ -175,13 +189,25 @@ struct ErrorEntry {
 };
 
 ErrorEntry errorList[] = {
-    {"CAN TIMEOUT",       ERR_CRITICAL, false},
-    {"INA226 ERR",        ERR_CRITICAL, false},
-    {"BAT1 OPEN",         ERR_WARNING,  false},
-    {"BAT1 OVER",         ERR_WARNING,  false},
-    {"BAT2 OPEN",         ERR_WARNING,  false},
-    {"BAT2 OVER",         ERR_WARNING,  false},
-    {"APU ERR",           ERR_WARNING,  false},
+    // Критические — связь и аппаратные ошибки
+    {"MCP2515 INIT",      ERR_CRITICAL, false},  // 0  — MCP2515 не инициализировался
+    {"CAN TIMEOUT",       ERR_CRITICAL, false},  // 1  — нет данных от Nano >500мс
+    {"INA226 I2C",        ERR_CRITICAL, false},  // 2  — INA226 не отвечает по I2C
+    {"INA226 OV",         ERR_CRITICAL, false},  // 3  — перенапряжение главной шины
+    {"INA226 OC",         ERR_CRITICAL, false},  // 4  — перегруз по току главной шины
+    {"INA226 TEMP",       ERR_CRITICAL, false},  // 5  — перегрев INA226 >85°C
+    {"BAT1 OPEN",         ERR_CRITICAL, false},  // 6  — обрыв цепи батареи 1
+    {"BAT1 OVER",         ERR_CRITICAL, false},  // 7  — перегруз входа ADC батареи 1
+    {"BAT1 CRIT",         ERR_CRITICAL, false},  // 8  — критическое напряжение батареи 1
+    {"BAT2 OPEN",         ERR_CRITICAL, false},  // 9  — обрыв цепи батареи 2
+    {"BAT2 OVER",         ERR_CRITICAL, false},  // 10 — перегруз входа ADC батареи 2
+    {"BAT2 CRIT",         ERR_CRITICAL, false},  // 11 — критическое напряжение батареи 2
+    // Предупреждения — значения вне диапазона
+    {"BAT1 LOW",          ERR_WARNING,  false},  // 12 — низкое напряжение батареи 1
+    {"BAT1 HIGH",         ERR_WARNING,  false},  // 13 — высокое напряжение батареи 1
+    {"BAT2 LOW",          ERR_WARNING,  false},  // 14 — низкое напряжение батареи 2
+    {"BAT2 HIGH",         ERR_WARNING,  false},  // 15 — высокое напряжение батареи 2
+    {"APU ERR",           ERR_WARNING,  false},  // 16 — ошибка APU
 };
 constexpr size_t kErrorCount = sizeof(errorList) / sizeof(errorList[0]);
 
@@ -209,26 +235,57 @@ void refreshErrorList() {
         errorList[i].active = false;
     }
 
-    // CAN timeout
-    if (!dataReceived) {
+    // MCP2515 — не инициализировался
+    if (!canInitialized) {
         errorList[0].active = true;
     }
 
-    // INA226
-    if (currentStatus.status_main_line != INA226_OK) {
+    // CAN timeout — нет данных >500мс
+    if (!dataReceived) {
         errorList[1].active = true;
     }
 
-    // Battery 1 — проверка статуса по CAN
-    checkBatteryErrors(currentStatus.status_battery1, 2, 3);
+    // INA226 — раздельные ошибки по коду статуса
+    switch (currentStatus.status_main_line) {
+        case INA226_ERR_I2C:  errorList[2].active = true; break;
+        case INA226_ERR_OV:   errorList[3].active = true; break;
+        case INA226_ERR_OC:   errorList[4].active = true; break;
+        case INA226_ERR_TEMP: errorList[5].active = true; break;
+    }
 
-    // Battery 2 — проверка статуса по CAN
-    checkBatteryErrors(currentStatus.status_battery2, 4, 5);
+    // Battery 1 — аппаратные ошибки ADC
+    checkBatteryErrors(currentStatus.status_battery1, 6, 7);
+    // Battery 1 — напряжение (статус приходит с Nano)
+    switch (currentStatus.volt_status_bat1) {
+        case BAT_VOLT_CRIT: errorList[8].active = true;  break;  // критическое
+        case BAT_VOLT_LOW:  errorList[12].active = true; break;  // низкое
+        case BAT_VOLT_HIGH: errorList[13].active = true; break;  // высокое
+        case BAT_VOLT_OVER: errorList[8].active = true;  break;  // критическое
+    }
+
+    // Battery 2 — аппаратные ошибки ADC
+    checkBatteryErrors(currentStatus.status_battery2, 9, 10);
+    // Battery 2 — напряжение (статус приходит с Nano)
+    switch (currentStatus.volt_status_bat2) {
+        case BAT_VOLT_CRIT: errorList[11].active = true; break;  // критическое
+        case BAT_VOLT_LOW:  errorList[14].active = true; break;  // низкое
+        case BAT_VOLT_HIGH: errorList[15].active = true; break;  // высокое
+        case BAT_VOLT_OVER: errorList[11].active = true; break;  // критическое
+    }
 
     // APU
     if (currentStatus.status_apu == APU_ERR) {
-        errorList[6].active = true;
+        errorList[16].active = true;
     }
+}
+
+// --- Подсчёт активных ошибок ---
+uint8_t activeErrorCount() {
+    uint8_t count = 0;
+    for (size_t i = 0; i < kErrorCount; i++) {
+        if (errorList[i].active) count++;
+    }
+    return count;
 }
 
 // --- Поиск следующей активной ошибки (циклический перебор всех активных) ---
@@ -254,7 +311,8 @@ int8_t findNextActiveError(int8_t currentIdx) {
 }
 
 // --- Обновление отображения ошибок (револвер) ---
-void updateErrorDisplay() {
+// Возвращает true, если есть активные ошибки
+bool updateErrorDisplay() {
     refreshErrorList();
 
     const uint32_t nowMs = millis();
@@ -263,10 +321,8 @@ void updateErrorDisplay() {
     int8_t activeIdx = findNextActiveError(currentErrorIndex);
 
     if (activeIdx < 0) {
-        // Нет ошибок — очищаем область
-        DRAW.fillRect(95, 0, 65, 40, TFT_BLACK);
         errorState = ERR_OK;
-        return;
+        return false;
     }
 
     // Если текущая ошибка не активна — переключаемся на первую найденную
@@ -285,21 +341,21 @@ void updateErrorDisplay() {
         }
     }
 
+    errorState = errorList[currentErrorIndex].state;
     // Отображаем текущую ошибку
     ErrorEntry& entry = errorList[currentErrorIndex];
     uint32_t color = (entry.state == ERR_CRITICAL) ? TFT_RED : TFT_YELLOW;
-    errorState = entry.state;
     drawError(entry.message, color);
-
     if (useSprite) spr.pushSprite(0, 0);
+    return true;
 }
 
-// --- Полная отрисовка статичных элементов (вызывается один раз) ---
+// --- Полная отрисовка статичных элементов ---
 void drawStaticScreen() {
     DRAW.fillScreen(TFT_BLACK);
 
-    uint32_t bat1Color = getStatusColor(currentStatus.status_battery1);
-    uint32_t bat2Color = getStatusColor(currentStatus.status_battery2);
+    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentBat1.voltage) : TFT_RED;
+    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentBat2.voltage) : TFT_RED;
 
     drawBattery1(bat1Color);
     drawBattery1ToMainLineVoltage(bat1Color);
@@ -309,29 +365,26 @@ void drawStaticScreen() {
     drawBattery2ToMainLineVoltage(bat2Color);
     drawBattery2Prime();
 
-    drawApu(getStatusColor(currentStatus.status_apu));
+    drawApu(dataReceived ? getStatusColor(currentStatus.status_apu) : TFT_RED);
     drawSpeedometer("??", TFT_RED);
     drawTime("--:--", TFT_RED);
 
     if (useSprite) spr.pushSprite(0, 0);
 }
 
-// --- Обновление только данных (без полной очистки) ---
+// --- Обновление данных ---
 void updateDynamicScreen() {
-    uint32_t mainLineColor = getStatusColor(currentStatus.status_main_line);
-    uint32_t dataColor = dataReceived ? TFT_GREEN : TFT_RED;
+    uint32_t mainLineColor = dataReceived ? getStatusColor(currentStatus.status_main_line) : TFT_RED;
 
-    // Обновляем напряжение и ток
     char mainVoltage[16], mainCurrent[16];
     snprintf(mainVoltage, sizeof(mainVoltage), "%.2fV", currentMainLine.voltage / 100.0f);
     snprintf(mainCurrent, sizeof(mainCurrent), "%.2fA", currentMainLine.current / 100.0f);
     drawMainLineVoltage(mainVoltage, mainLineColor);
     drawMainLineCurrent(mainCurrent, mainLineColor);
 
-    // Обновляем цвета батарей если изменились
     static uint32_t lastBat1Color = 0, lastBat2Color = 0;
-    uint32_t bat1Color = getStatusColor(currentStatus.status_battery1);
-    uint32_t bat2Color = getStatusColor(currentStatus.status_battery2);
+    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentBat1.voltage) : TFT_RED;
+    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentBat2.voltage) : TFT_RED;
 
     if (bat1Color != lastBat1Color) {
         drawBattery1(bat1Color);
@@ -344,7 +397,6 @@ void updateDynamicScreen() {
         lastBat2Color = bat2Color;
     }
 
-    // Обновляем стрелки приоритета
     static uint8_t lastSelectedBattery = 0;
     if (selectedBattery != lastSelectedBattery) {
         if (selectedBattery == 1) {
@@ -357,26 +409,24 @@ void updateDynamicScreen() {
         lastSelectedBattery = selectedBattery;
     }
 
-    // Обновляем APU если изменился
     static uint32_t lastApuColor = 0;
-    uint32_t apuColor = getStatusColor(currentStatus.status_apu);
+    uint32_t apuColor = dataReceived ? getStatusColor(currentStatus.status_apu) : TFT_RED;
     if (apuColor != lastApuColor) {
         drawApu(apuColor);
         lastApuColor = apuColor;
     }
 
-    // Обновляем цвет спидометра/времени
-    static uint32_t lastDataColor = 0;
-    if (dataColor != lastDataColor) {
-        drawSpeedometer("??", dataColor);
-        drawTime("--:--", dataColor);
-        lastDataColor = dataColor;
+    static bool speedTimeDrawn = false;
+    if (!speedTimeDrawn) {
+        drawSpeedometer("??", TFT_RED);
+        drawTime("--:--", TFT_RED);
+        speedTimeDrawn = true;
     }
 
     if (useSprite) spr.pushSprite(0, 0);
 }
 
-// --- Отрисовка всего экрана (для совместимости) ---
+// --- Отрисовка всего экрана ---
 void drawScreen() {
     drawStaticScreen();
     updateDynamicScreen();
@@ -531,7 +581,7 @@ void loop() {
         Serial.println("CAN TIMEOUT: no data from Nano!");
     }
 
-    // Обновление отображения ошибок
+    // Обновление состояния ошибок (без отрисовки)
     updateErrorDisplay();
 
     // Перерисовка экрана при изменении статуса приёма CAN (первый приход/таймаут)
@@ -540,7 +590,7 @@ void loop() {
     if (dataReceived != lastDataReceived || dataChanged) {
         lastDataReceived = dataReceived;
         dataChanged = false;
-        updateDynamicScreen(); // частичное обновление без мерцания
+        updateDynamicScreen(); // обновление динамических элементов
     }
 
     // Периодический вывод состояния шины для диагностики отсутствия RX-кадров
