@@ -44,7 +44,11 @@ uint32_t lastErrorUpdateMs = 0;
 bool errorBlinkState = false;
 
 TFT_eSPI tft = TFT_eSPI();
-TFT_eSprite errorSpr = TFT_eSprite(&tft); // Спрайт для модуля ошибок (65x40)
+TFT_eSprite spr = TFT_eSprite(&tft); // Спрайт на весь экран
+bool useSprite = false; // true если спрайт создан успешно
+
+// Макрос: рисовать на спрайте если он есть, иначе напрямую на tft
+#define DRAW (useSprite ? spr : tft)
 
 // --- Цвет по статусу модуля ---
 uint32_t getStatusColor(uint8_t status) {
@@ -58,117 +62,108 @@ uint32_t getStatusColor(uint8_t status) {
 #define BAT_UNDER_VOLTAGE  300  // 3.00 В * 100
 #define BAT_OVER_VOLTAGE   520  // 4.20 В * 100
 
-// --- Определение статуса батареи по напряжению ---
-uint8_t getBatteryStatusByVoltage(uint16_t voltage) {
-    if (voltage == 0) return BAT_ADC_ERR_OPEN;
-    if (voltage > BAT_OVER_VOLTAGE) return BAT_ADC_ERR_OVER;
-    if (voltage < BAT_UNDER_VOLTAGE) return BAT_ADC_ERR_OPEN; // under voltage = обрыв/низкое
-    return BAT_ADC_OK;
-}
-
 // --- Отрисовка индикатора батареи 1 ---
 void drawBattery1(const uint32_t color) {
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawRect(5, 10, 30, 20, color);
-    tft.setTextSize(0);
-    tft.setCursor(9, 16);
-    tft.println("БАТ1");
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.drawRect(5, 10, 30, 20, color);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(9, 16);
+    DRAW.println("BAT1");
 }
 
 // --- Отрисовка стрелки приоритета батареи 1 ---
 void drawBattery1Prime() {
-    tft.drawLine(10, 35, 10, 44, TFT_WHITE);
-    tft.drawLine(10, 35, 13, 38, TFT_WHITE);
-    tft.drawLine(10, 35, 7, 38, TFT_WHITE);
+    DRAW.drawLine(10, 35, 10, 44, TFT_WHITE);
+    DRAW.drawLine(10, 35, 13, 38, TFT_WHITE);
+    DRAW.drawLine(10, 35, 7, 38, TFT_WHITE);
 }
 
 // --- Отрисовка стрелки приоритета батареи 2 ---
 void drawBattery2Prime() {
-    tft.drawLine(80, 35, 80, 44, TFT_WHITE);
-    tft.drawLine(80, 35, 83, 38, TFT_WHITE);
-    tft.drawLine(80, 35, 77, 38, TFT_WHITE);
+    DRAW.drawLine(80, 35, 80, 44, TFT_WHITE);
+    DRAW.drawLine(80, 35, 83, 38, TFT_WHITE);
+    DRAW.drawLine(80, 35, 77, 38, TFT_WHITE);
 }
 
 // --- Отрисовка линии от батареи 1 к шине ---
 void drawBattery1ToMainLineVoltage(const uint32_t color) {
-    tft.drawLine(30, 30, 30, 44, color);
+    DRAW.drawLine(30, 30, 30, 44, color);
 }
 
 // --- Отрисовка индикатора батареи 2 ---
 void drawBattery2(const uint32_t color) {
-    tft.drawRect(55, 10, 30, 20, color);
-    tft.setTextSize(0);
-    tft.setCursor(59, 16);
-    tft.println("БАТ2");
+    DRAW.drawRect(55, 10, 30, 20, color);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(59, 16);
+    DRAW.println("BAT2");
 }
 
 // --- Отрисовка линии от батареи 2 к шине ---
 void drawBattery2ToMainLineVoltage(const uint32_t color) {
-    tft.drawLine(60, 30, 60, 44, color);
+    DRAW.drawLine(60, 30, 60, 44, color);
 }
 
 
 
 // --- Отрисовка напряжения главной шины ---
 void drawMainLineVoltage(const char* value, const uint32_t color) {
-    tft.fillRect(23, 45, 43, 20, TFT_BLACK);
-    tft.drawRect(23, 45, 43, 20, color);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(0);
-    tft.setCursor(27, 51);
-    tft.println(value);
+    DRAW.fillRect(23, 45, 43, 20, TFT_BLACK);
+    DRAW.drawRect(23, 45, 43, 20, color);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(27, 51);
+    DRAW.println(value);
 }
 
 // --- Отрисовка тока главной шины ---
 void drawMainLineCurrent(const char* value, const uint32_t color) {
-    tft.fillRect(23, 65, 43, 20, TFT_BLACK);
-    tft.drawRect(23, 65, 43, 20, color);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setCursor(27, 71);
-    tft.println(value);
+    DRAW.fillRect(23, 65, 43, 20, TFT_BLACK);
+    DRAW.drawRect(23, 65, 43, 20, color);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setCursor(27, 71);
+    DRAW.println(value);
 }
 
 // --- Отрисовка индикатора APU ---
 void drawApu(const uint32_t color) {
-    tft.fillRect(30, 100, 30, 20, TFT_BLACK);
-    tft.drawLine(45, 85, 45, 99, color);
-    tft.drawRect(30, 100, 30, 20, color);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(0);
-    tft.setCursor(36, 106);
-    tft.println("ВСУ");
+    DRAW.fillRect(30, 100, 30, 20, TFT_BLACK);
+    DRAW.drawLine(45, 85, 45, 99, color);
+    DRAW.drawRect(30, 100, 30, 20, color);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(36, 106);
+    DRAW.println("APU");
 }
 
 // --- Отрисовка спидометра ---
 void drawSpeedometer(const char* speedValue, const uint32_t frameColor) {
-    tft.fillRect(85, 88, 75, 40, TFT_BLACK);
-    tft.drawRect(85, 88, 75, 40, frameColor);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setCursor(91, 98);
-    tft.setTextSize(3);
-    tft.print(speedValue);
-    tft.setTextSize(0);
-    tft.println("км/ч");
+    DRAW.fillRect(85, 88, 75, 40, TFT_BLACK);
+    DRAW.drawRect(85, 88, 75, 40, frameColor);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setCursor(91, 98);
+    DRAW.setTextSize(3);
+    DRAW.print(speedValue);
+    DRAW.setTextSize(0);
+    DRAW.println("km/h");
 }
 
-// --- Отрисовка ошибок (белый текст, цветная рамка) через спрайт ---
+// --- Отрисовка ошибок (белый текст, цветная рамка) ---
 void drawError(const char* message, const uint32_t frameColor) {
-    errorSpr.fillSprite(TFT_BLACK);
-    errorSpr.drawRect(0, 0, 65, 40, frameColor);
-    errorSpr.setTextColor(TFT_WHITE, TFT_BLACK);
-    errorSpr.setTextSize(0);
-    errorSpr.setCursor(4, 10);
-    errorSpr.println(message);
-    errorSpr.pushSprite(95, 0);
+    DRAW.fillRect(95, 0, 65, 40, TFT_BLACK);
+    DRAW.drawRect(95, 0, 65, 40, frameColor);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(99, 10);
+    DRAW.println(message);
 }
 // --- Отрисовка времени от gps ---
 void drawTime(const char* message, const uint32_t frameColor) {
-    tft.fillRect(95, 41, 65, 40, TFT_BLACK);
-    tft.drawRect(95, 41, 65, 40, frameColor);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(0);
-    tft.setCursor(99, 51);
-    tft.println(message);
+    DRAW.fillRect(95, 41, 65, 40, TFT_BLACK);
+    DRAW.drawRect(95, 41, 65, 40, frameColor);
+    DRAW.setTextColor(TFT_WHITE, TFT_BLACK);
+    DRAW.setTextSize(0);
+    DRAW.setCursor(99, 51);
+    DRAW.println(message);
 }
 
 // --- Револвер ошибок ---
@@ -194,6 +189,19 @@ uint8_t currentErrorIndex = 0;
 uint32_t lastErrorSwitchMs = 0;
 constexpr uint32_t ERROR_SWITCH_INTERVAL_MS = 3000;
 
+// --- Проверка ошибок батарей по статусу ---
+// Возвращает true, если есть активная ошибка батареи
+bool checkBatteryErrors(uint8_t batStatus, uint8_t errOpenIdx, uint8_t errOverIdx) {
+    if (batStatus == BAT_ADC_ERR_OPEN) {
+        errorList[errOpenIdx].active = true;
+        return true;
+    } else if (batStatus == BAT_ADC_ERR_OVER) {
+        errorList[errOverIdx].active = true;
+        return true;
+    }
+    return false;
+}
+
 // --- Обновление списка активных ошибок на основе статусов ---
 void refreshErrorList() {
     // Сбрасываем все ошибки
@@ -211,19 +219,11 @@ void refreshErrorList() {
         errorList[1].active = true;
     }
 
-    // Battery 1
-    if (currentStatus.status_battery1 == BAT_ADC_ERR_OPEN) {
-        errorList[2].active = true;
-    } else if (currentStatus.status_battery1 == BAT_ADC_ERR_OVER) {
-        errorList[3].active = true;
-    }
+    // Battery 1 — проверка статуса по CAN
+    checkBatteryErrors(currentStatus.status_battery1, 2, 3);
 
-    // Battery 2
-    if (currentStatus.status_battery2 == BAT_ADC_ERR_OPEN) {
-        errorList[4].active = true;
-    } else if (currentStatus.status_battery2 == BAT_ADC_ERR_OVER) {
-        errorList[5].active = true;
-    }
+    // Battery 2 — проверка статуса по CAN
+    checkBatteryErrors(currentStatus.status_battery2, 4, 5);
 
     // APU
     if (currentStatus.status_apu == APU_ERR) {
@@ -263,9 +263,8 @@ void updateErrorDisplay() {
     int8_t activeIdx = findNextActiveError(currentErrorIndex);
 
     if (activeIdx < 0) {
-        // Нет ошибок — очищаем область через спрайт
-        errorSpr.fillSprite(TFT_BLACK);
-        errorSpr.pushSprite(95, 0);
+        // Нет ошибок — очищаем область
+        DRAW.fillRect(95, 0, 65, 40, TFT_BLACK);
         errorState = ERR_OK;
         return;
     }
@@ -291,61 +290,96 @@ void updateErrorDisplay() {
     uint32_t color = (entry.state == ERR_CRITICAL) ? TFT_RED : TFT_YELLOW;
     errorState = entry.state;
     drawError(entry.message, color);
+
+    if (useSprite) spr.pushSprite(0, 0);
 }
 
-// --- Отрисовка всего экрана ---
-void drawScreen() {
-    // ----- Цвет Bat1 (статус CAN + проверка напряжения) -----
-    uint8_t bat1Combined = currentStatus.status_battery1;
-    if (bat1Combined == BAT_ADC_OK) {
-        bat1Combined = getBatteryStatusByVoltage(currentBat1.voltage);
-    }
-    uint32_t bat1Color = getStatusColor(bat1Combined);
+// --- Полная отрисовка статичных элементов (вызывается один раз) ---
+void drawStaticScreen() {
+    DRAW.fillScreen(TFT_BLACK);
 
-    // ----- Цвет Bat2 (статус CAN + проверка напряжения) -----
-    uint8_t bat2Combined = currentStatus.status_battery2;
-    if (bat2Combined == BAT_ADC_OK) {
-        bat2Combined = getBatteryStatusByVoltage(currentBat2.voltage);
-    }
-    uint32_t bat2Color = getStatusColor(bat2Combined);
-
-    // ----- Цвет главной шины (INA226) -----
-    uint32_t mainLineColor = getStatusColor(currentStatus.status_main_line);
-
-    // ----- Цвет APU -----
-    uint32_t apuColor = getStatusColor(currentStatus.status_apu);
-
-    // ----- Цвет спидометра и времени (статус приёма CAN) -----
-    uint32_t dataColor = dataReceived ? TFT_GREEN : TFT_RED;
+    uint32_t bat1Color = getStatusColor(currentStatus.status_battery1);
+    uint32_t bat2Color = getStatusColor(currentStatus.status_battery2);
 
     drawBattery1(bat1Color);
-    drawBattery1ToMainLineVoltage(bat1Color); // линия от Bat1 — цвет Bat1
-    if (selectedBattery == 1) {
-        drawBattery1Prime();
-        tft.fillRect(75, 35, 10, 10, TFT_BLACK); // очистить стрелку Bat2
-    } else {
-        tft.fillRect(5, 35, 10, 10, TFT_BLACK);  // очистить стрелку Bat1
-    }
+    drawBattery1ToMainLineVoltage(bat1Color);
+    drawBattery1Prime();
 
     drawBattery2(bat2Color);
-    drawBattery2ToMainLineVoltage(bat2Color); // линия от Bat2 — цвет Bat2
-    if (selectedBattery == 2) {
-        drawBattery2Prime();
-        tft.fillRect(5, 35, 10, 10, TFT_BLACK);  // очистить стрелку Bat1
-    } else {
-        tft.fillRect(75, 35, 10, 10, TFT_BLACK); // очистить стрелку Bat2
-    }
+    drawBattery2ToMainLineVoltage(bat2Color);
+    drawBattery2Prime();
 
-    // Форматирование значений напряжения и тока
+    drawApu(getStatusColor(currentStatus.status_apu));
+    drawSpeedometer("??", TFT_RED);
+    drawTime("--:--", TFT_RED);
+
+    if (useSprite) spr.pushSprite(0, 0);
+}
+
+// --- Обновление только данных (без полной очистки) ---
+void updateDynamicScreen() {
+    uint32_t mainLineColor = getStatusColor(currentStatus.status_main_line);
+    uint32_t dataColor = dataReceived ? TFT_GREEN : TFT_RED;
+
+    // Обновляем напряжение и ток
     char mainVoltage[16], mainCurrent[16];
     snprintf(mainVoltage, sizeof(mainVoltage), "%.2fV", currentMainLine.voltage / 100.0f);
     snprintf(mainCurrent, sizeof(mainCurrent), "%.2fA", currentMainLine.current / 100.0f);
     drawMainLineVoltage(mainVoltage, mainLineColor);
     drawMainLineCurrent(mainCurrent, mainLineColor);
 
-    drawApu(apuColor);
-    drawSpeedometer("??", dataColor);
-    drawTime("--:--", dataColor);
+    // Обновляем цвета батарей если изменились
+    static uint32_t lastBat1Color = 0, lastBat2Color = 0;
+    uint32_t bat1Color = getStatusColor(currentStatus.status_battery1);
+    uint32_t bat2Color = getStatusColor(currentStatus.status_battery2);
+
+    if (bat1Color != lastBat1Color) {
+        drawBattery1(bat1Color);
+        drawBattery1ToMainLineVoltage(bat1Color);
+        lastBat1Color = bat1Color;
+    }
+    if (bat2Color != lastBat2Color) {
+        drawBattery2(bat2Color);
+        drawBattery2ToMainLineVoltage(bat2Color);
+        lastBat2Color = bat2Color;
+    }
+
+    // Обновляем стрелки приоритета
+    static uint8_t lastSelectedBattery = 0;
+    if (selectedBattery != lastSelectedBattery) {
+        if (selectedBattery == 1) {
+            drawBattery1Prime();
+            DRAW.fillRect(75, 35, 10, 10, TFT_BLACK);
+        } else {
+            drawBattery2Prime();
+            DRAW.fillRect(5, 35, 10, 10, TFT_BLACK);
+        }
+        lastSelectedBattery = selectedBattery;
+    }
+
+    // Обновляем APU если изменился
+    static uint32_t lastApuColor = 0;
+    uint32_t apuColor = getStatusColor(currentStatus.status_apu);
+    if (apuColor != lastApuColor) {
+        drawApu(apuColor);
+        lastApuColor = apuColor;
+    }
+
+    // Обновляем цвет спидометра/времени
+    static uint32_t lastDataColor = 0;
+    if (dataColor != lastDataColor) {
+        drawSpeedometer("??", dataColor);
+        drawTime("--:--", dataColor);
+        lastDataColor = dataColor;
+    }
+
+    if (useSprite) spr.pushSprite(0, 0);
+}
+
+// --- Отрисовка всего экрана (для совместимости) ---
+void drawScreen() {
+    drawStaticScreen();
+    updateDynamicScreen();
 }
 
 void printCanErrorFlags(const uint8_t errFlags) {
@@ -363,9 +397,12 @@ void printCanErrorFlags(const uint8_t errFlags) {
 }
 
 // --- Обработка входящего CAN-сообщения ---
+bool dataChanged = false; // флаг: пришли новые данные — нужно перерисовать экран
+
 void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
     canLastRxMs = millis();
     dataReceived = true;
+    dataChanged = true;
     Serial.printf("CAN RX: id=0x%03lX len=%u\n", id, len);
     CanId canId = (CanId)id;
     switch (canId) {
@@ -423,7 +460,14 @@ void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
 void setup() {
     tft.init();
     tft.setRotation(1);
-    errorSpr.createSprite(65, 40); // Спрайт для модуля ошибок
+    // При setRotation(1) реальные размеры: 160x128 (ширина x высота)
+    if (spr.createSprite(160, 128) != nullptr) {
+        useSprite = true;
+        Serial.println("Sprite created OK (160x128)");
+    } else {
+        useSprite = false;
+        Serial.println("Sprite FAILED — fallback to direct TFT drawing");
+    }
     pinMode(BAT1_SELECT_PIN, INPUT_PULLUP);
     pinMode(BAT2_SELECT_PIN, INPUT_PULLUP);
     tft.fillScreen(TFT_BLACK);
@@ -491,10 +535,12 @@ void loop() {
     updateErrorDisplay();
 
     // Перерисовка экрана при изменении статуса приёма CAN (первый приход/таймаут)
+    // или при получении новых данных
     static bool lastDataReceived = false;
-    if (dataReceived != lastDataReceived) {
+    if (dataReceived != lastDataReceived || dataChanged) {
         lastDataReceived = dataReceived;
-        drawScreen();
+        dataChanged = false;
+        updateDynamicScreen(); // частичное обновление без мерцания
     }
 
     // Периодический вывод состояния шины для диагностики отсутствия RX-кадров
@@ -519,11 +565,11 @@ void loop() {
 
     if (curBat1 == 0 && prevBat1 == 1) {
         selectedBattery = 1;
-        drawScreen();
+        updateDynamicScreen();
     }
     if (curBat2 == 0 && prevBat2 == 1) {
         selectedBattery = 2;
-        drawScreen();
+        updateDynamicScreen();
     }
     prevBat1 = curBat1;
     prevBat2 = curBat2;
