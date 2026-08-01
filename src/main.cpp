@@ -243,6 +243,8 @@ void refreshErrorList() {
     // CAN timeout — нет данных >500мс
     if (!dataReceived) {
         errorList[1].active = true;
+        // При таймауте CAN остальные статусы недостоверны — не показываем их
+        return;
     }
 
     // INA226 — раздельные ошибки по коду статуса
