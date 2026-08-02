@@ -10,12 +10,24 @@
 
 #include <SPI.h>
 #include <mcp_can.h>
-MCP_CAN CAN(MCP2515_CS_PIN);
+
+// MCP2515 использует тот же SPI (VSPI), что и TFT_eSPI, но с отдельным CS.
+// Объект MCP_CAN создаётся в setup() после инициализации SPI.
+MCP_CAN* CAN = nullptr;
 bool canInitialized = false;
 uint32_t canRxCount = 0;
 uint32_t canLastDiagMs = 0;
 uint32_t canLastTxTestMs = 0;
 constexpr bool kEnableCanTxTest = false;
+// «Здоровье» MCP2515 (жив чип или нет):
+// - при старте: setMode(MCP_NORMAL) вернул ошибку после успешного begin()
+// - в работе: пинг каждые ~30 сек через setMode(MCP_NORMAL)
+// - завис INT-pin: checkReceive() видит данные, но readMsgBuf не приводит к приросту canRxCount
+bool mcp2515Dead = false;
+uint32_t lastMcp2515PingMs = 0;
+constexpr uint32_t MCP2515_PING_INTERVAL_MS = 30000;
+uint32_t lastIntPinStuckMs = 0;
+constexpr uint32_t INT_PIN_STUCK_TIMEOUT_MS = 2000;
 
 // --- Обработка ошибок ---
 #define CAN_TIMEOUT_MS    500
@@ -208,6 +220,7 @@ ErrorEntry errorList[] = {
     {"BAT2 LOW",          ERR_WARNING,  false},  // 14 — низкое напряжение батареи 2
     {"BAT2 HIGH",         ERR_WARNING,  false},  // 15 — высокое напряжение батареи 2
     {"APU ERR",           ERR_WARNING,  false},  // 16 — ошибка APU
+    {"MCP2515 DEAD",      ERR_CRITICAL, false},  // 17 — MCP2515 не отвечает (перестал отвечать по SPI)
 };
 constexpr size_t kErrorCount = sizeof(errorList) / sizeof(errorList[0]);
 
@@ -238,6 +251,11 @@ void refreshErrorList() {
     // MCP2515 — не инициализировался
     if (!canInitialized) {
         errorList[0].active = true;
+    }
+
+    // MCP2515 — перестал отвечать по SPI / завис INT-pin
+    if (mcp2515Dead) {
+        errorList[17].active = true;
     }
 
     // CAN timeout — нет данных >500мс
@@ -529,28 +547,50 @@ void setup() {
 
     pinMode(MCP2515_CS_PIN, OUTPUT);
     pinMode(MCP2515_INT_PIN, INPUT);
+    digitalWrite(MCP2515_CS_PIN, HIGH); // Отключаем MCP2515 до инициализации
 
-    // Кристалл 8 МГц
-    if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
-        Serial.println("MCP2515 initialized successfully (500kbps, 8MHz clock)");
-        canInitialized = true;
-    } else {
-        Serial.println("MCP2515 init failed!");
-        canInitialized = false;
+    // Задержка для стабилизации питания MCP2515
+    delay(100);
+
+    // Инициализируем SPI для MCP2515 (используем тот же VSPI, что и TFT_eSPI,
+    // но с отдельным CS пином — TFT_eSPI управляет своим CS программно)
+    SPI.begin();
+    // Небольшая задержка для стабилизации шины SPI
+    delay(10);
+
+    // Создаём объект MCP_CAN с указанием SPI порта
+    CAN = new MCP_CAN(&SPI, MCP2515_CS_PIN);
+
+    // Пытаемся инициализировать MCP2515 с повторными попытками
+    constexpr uint8_t MCP2515_INIT_RETRIES = 5;
+    for (uint8_t attempt = 1; attempt <= MCP2515_INIT_RETRIES; attempt++) {
+        Serial.printf("MCP2515 init attempt %u/%u...\n", attempt, MCP2515_INIT_RETRIES);
+        // Кристалл 8 МГц
+        if (CAN->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+            Serial.println("MCP2515 initialized successfully (500kbps, 8MHz clock)");
+            canInitialized = true;
+            break;
+        } else {
+            Serial.println("MCP2515 init failed!");
+            canInitialized = false;
+            delay(200);
+        }
     }
 
     if (canInitialized) {
         // Принимаем все стандартные 11-битные ID
-        CAN.init_Mask(0, 0, 0x00000000);
-        CAN.init_Mask(1, 0, 0x00000000);
+        CAN->init_Mask(0, 0, 0x00000000);
+        CAN->init_Mask(1, 0, 0x00000000);
         for (int i = 0; i < 6; i++) {
-            CAN.init_Filt(i, 0, 0x00000000);
+            CAN->init_Filt(i, 0, 0x00000000);
         }
 
-        if (CAN.setMode(MCP_NORMAL) == CAN_OK) {
+        if (CAN->setMode(MCP_NORMAL) == CAN_OK) {
             Serial.println("CAN mode set to MCP_NORMAL; waiting for physical bus traffic");
+            mcp2515Dead = false;
         } else {
-            Serial.println("CAN mode change to MCP_NORMAL failed");
+            Serial.println("CAN mode change to MCP_NORMAL failed — MCP2515 may be dead!");
+            mcp2515Dead = true;
         }
     }
 
@@ -558,23 +598,80 @@ void setup() {
 }
 
 void loop() {
-    if (!canInitialized) {
+    // Попытка повторной инициализации MCP2515, если она не удалась
+    if (!canInitialized && CAN != nullptr) {
+        static uint32_t lastReinitMs = 0;
+        const uint32_t nowMs = millis();
+        if (nowMs - lastReinitMs >= 5000) { // каждые 5 секунд
+            lastReinitMs = nowMs;
+            Serial.println("Retrying MCP2515 init...");
+            if (CAN->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+                Serial.println("MCP2515 re-initialized successfully");
+                canInitialized = true;
+                mcp2515Dead = false;
+                CAN->init_Mask(0, 0, 0x00000000);
+                CAN->init_Mask(1, 0, 0x00000000);
+                for (int i = 0; i < 6; i++) CAN->init_Filt(i, 0, 0x00000000);
+                CAN->setMode(MCP_NORMAL);
+            }
+        }
+    }
+
+    if (!canInitialized || CAN == nullptr) {
+        delay(200);
+        return;
+    }
+
+    const uint32_t nowMs = millis();
+
+    // --- Пинг MCP2515: периодический setMode(MCP_NORMAL) для проверки связи по SPI ---
+    if (!mcp2515Dead && (nowMs - lastMcp2515PingMs >= MCP2515_PING_INTERVAL_MS)) {
+        lastMcp2515PingMs = nowMs;
+        if (CAN->setMode(MCP_NORMAL) != CAN_OK) {
+            Serial.println("MCP2515 PING FAILED — chip is not responding!");
+            mcp2515Dead = true;
+        }
+    }
+
+    // Если MCP2515 помечен как мёртвый — пытаемся восстановить связь
+    if (mcp2515Dead) {
+        static uint32_t lastDeadRetryMs = 0;
+        if (nowMs - lastDeadRetryMs >= 3000) {
+            lastDeadRetryMs = nowMs;
+            Serial.println("MCP2515 dead, attempting recovery...");
+            if (CAN->setMode(MCP_NORMAL) == CAN_OK) {
+                Serial.println("MCP2515 recovered!");
+                mcp2515Dead = false;
+            }
+        }
         delay(200);
         return;
     }
 
     // Обработка входящих CAN-сообщений
-    byte rxStatus = CAN.checkReceive();
+    const uint32_t canRxCountBefore = canRxCount;
+    byte rxStatus = CAN->checkReceive();
     if (CAN_MSGAVAIL == rxStatus) {
         unsigned long id = 0;
         uint8_t len = 0;
         byte buf[8] = {0};
-        CAN.readMsgBuf(&id, &len, buf);
+        CAN->readMsgBuf(&id, &len, buf);
         canRxCount++;
         handleCanMessage(id, buf, len);
     }
 
-    const uint32_t nowMs = millis();
+    // --- Защита от зависшего INT-пина (checkReceive > 2 сек, но polling не приводит к приросту счётчика) ---
+    if (rxStatus == CAN_MSGAVAIL && canRxCount == canRxCountBefore) {
+        if (lastIntPinStuckMs == 0) {
+            lastIntPinStuckMs = nowMs;
+        } else if (nowMs - lastIntPinStuckMs >= INT_PIN_STUCK_TIMEOUT_MS) {
+            Serial.println("MCP2515 INT PIN STUCK — no RX progress!");
+            mcp2515Dead = true;
+            lastIntPinStuckMs = 0;
+        }
+    } else {
+        lastIntPinStuckMs = 0;
+    }
 
     // Проверка таймаута (нет данных > 500 мс)
     if (dataReceived && nowMs - canLastRxMs >= CAN_TIMEOUT_MS) {
@@ -598,12 +695,14 @@ void loop() {
     // Периодический вывод состояния шины для диагностики отсутствия RX-кадров
     if (nowMs - canLastDiagMs >= 2000) {
         canLastDiagMs = nowMs;
-        uint8_t errFlags = CAN.getError();
-        byte errStatus = CAN.checkError();
-        Serial.printf("CAN diag: rx=%lu INT=%u rxStatus=%u err=%u eflg=0x%02X\n",
+        uint8_t errFlags = CAN->getError();
+        byte errStatus = CAN->checkError();
+        Serial.printf("CAN diag: rx=%lu INT=%u rxStatus=%u init=%u dead=%u err=%u eflg=0x%02X\n",
             (unsigned long)canRxCount,
             (unsigned)digitalRead(MCP2515_INT_PIN),
             (unsigned)rxStatus,
+            (unsigned)canInitialized,
+            (unsigned)mcp2515Dead,
             (unsigned)errStatus,
             (unsigned)errFlags
         );
