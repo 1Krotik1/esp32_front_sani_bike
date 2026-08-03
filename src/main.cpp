@@ -67,8 +67,8 @@ bool useSprite = false; // true если спрайт создан успешн�
 #define DRAW (useSprite ? spr : tft)
 
 // --- Пороги защиты батарей (12В — 3S Li-ion) ---
-#define BAT_LOW_VOLTAGE      1050  // 10.50 В * 100 — предупреждение
-#define BAT_CRIT_VOLTAGE      900  // 9.00 В * 100 — критическое
+#define BAT_LOW_VOLTAGE       35 // 10.50 В * 100 — предупреждение
+#define BAT_CRIT_VOLTAGE      25  // 9.00 В * 100 — критическое
 #define BAT_HIGH_VOLTAGE     1300  // 13.00 В * 100 — предупреждение
 #define BAT_OVER_VOLTAGE     1400  // 14.00 В * 100 — критическое
 
@@ -529,7 +529,7 @@ void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
 
 void setup() {
     tft.init();
-    tft.setRotation(1);
+    tft.setRotation(3);
     // При setRotation(1) реальные размеры: 160x128 (ширина x высота)
     if (spr.createSprite(160, 128) != nullptr) {
         useSprite = true;
