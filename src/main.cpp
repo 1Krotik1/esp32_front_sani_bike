@@ -1,5 +1,6 @@
 #include <TFT_eSPI.h>
 #include "Saninokia.h"
+#include "brave.h"
 #include "protocol_can.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -593,7 +594,10 @@ void setup() {
             mcp2515Dead = true;
         }
     }
-
+    tft.fillScreen(TFT_BLACK);
+    tft.pushImage(0, 0, 160, 128, brave);
+    delay(5000);
+    tft.fillScreen(TFT_BLACK);
     drawScreen();
 }
 
