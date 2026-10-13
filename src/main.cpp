@@ -1,7 +1,9 @@
 #include <TFT_eSPI.h>
 #include "Saninokia.h"
 #include "brave.h"
+#include "xvz.h"
 #include "protocol_can.h"
+#include "can_app.h"
 #include <Arduino.h>
 #include <stdio.h>
 
@@ -40,6 +42,7 @@ constexpr uint32_t INT_PIN_STUCK_TIMEOUT_MS = 2000;
 
 uint32_t canLastRxMs = 0;
 bool dataReceived = false;
+bool dataChanged = false;
 uint8_t selectedBattery = 1; // 1 = Bat1, 2 = Bat2
 
 StatusData currentStatus;
@@ -68,8 +71,8 @@ bool useSprite = false; // true если спрайт создан успешн�
 #define DRAW (useSprite ? spr : tft)
 
 // --- Пороги защиты батарей (12В — 3S Li-ion) ---
-#define BAT_LOW_VOLTAGE       35 // 10.50 В * 100 — предупреждение
-#define BAT_CRIT_VOLTAGE      25  // 9.00 В * 100 — критическое
+#define BAT_LOW_VOLTAGE     1050 // 10.50 В * 100 — предупреждение
+#define BAT_CRIT_VOLTAGE     900 // 9.00 В * 100 — критическое
 #define BAT_HIGH_VOLTAGE     1300  // 13.00 В * 100 — предупреждение
 #define BAT_OVER_VOLTAGE     1400  // 14.00 В * 100 — критическое
 
@@ -453,84 +456,14 @@ void drawScreen() {
     updateDynamicScreen();
 }
 
-void printCanErrorFlags(const uint8_t errFlags) {
-    if (errFlags == 0) {
-        Serial.println("CAN eflg: none");
-        return;
-    }
-
-    if (errFlags & 0x20) Serial.println("CAN eflg: TXBO");
-    if (errFlags & 0x10) Serial.println("CAN eflg: TXEP");
-    if (errFlags & 0x08) Serial.println("CAN eflg: RXEP");
-    if (errFlags & 0x04) Serial.println("CAN eflg: TXWAR");
-    if (errFlags & 0x02) Serial.println("CAN eflg: RXWAR");
-    if (errFlags & 0x01) Serial.println("CAN eflg: EWARN");
-}
-
-// --- Обработка входящего CAN-сообщения ---
-bool dataChanged = false; // флаг: пришли новые данные — нужно перерисовать экран
-
-void handleCanMessage(uint32_t id, const byte* data, uint8_t len) {
-    canLastRxMs = millis();
-    dataReceived = true;
-    dataChanged = true;
-    Serial.printf("CAN RX: id=0x%03lX len=%u\n", id, len);
-    CanId canId = (CanId)id;
-    switch (canId) {
-        case CAN_ID_STATUS_DATA: {
-            if (len < sizeof(StatusData)) {
-                Serial.printf("CAN STATUS_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(StatusData));
-                break;
-            }
-            const StatusData* statusData = (const StatusData*)data;
-            currentStatus = *statusData;
-            Serial.printf("STATUS: main=%u bat1=%u bat2=%u can=%u\n",
-                statusData->status_main_line,
-                statusData->status_battery1,
-                statusData->status_battery2,
-                statusData->status_apu
-            );
-            break;
-        }
-        case CAN_ID_MAIN_LINE_DATA: {
-            if (len < sizeof(MainLineData)) {
-                Serial.printf("CAN MAIN_LINE_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(MainLineData));
-                break;
-            }
-            const MainLineData* mainLineData = (const MainLineData*)data;
-            currentMainLine = *mainLineData;
-            Serial.printf("MAIN_LINE: voltage=%u current=%u\n", mainLineData->voltage, mainLineData->current);
-            break;
-        }
-        case CAN_ID_BATTERY1_DATA: {
-            if (len < sizeof(Battery1Data)) {
-                Serial.printf("CAN BATTERY1_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(Battery1Data));
-                break;
-            }
-            const Battery1Data* battery1Data = (const Battery1Data*)data;
-            currentBat1 = *battery1Data;
-            Serial.printf("BATTERY1: voltage=%u\n", battery1Data->voltage);
-            break;
-        }
-        case CAN_ID_BATTERY2_DATA: {
-            if (len < sizeof(Battery2Data)) {
-                Serial.printf("CAN BATTERY2_DATA: invalid len=%u expected=%u\n", len, (unsigned)sizeof(Battery2Data));
-                break;
-            }
-            const Battery2Data* battery2Data = (const Battery2Data*)data;
-            currentBat2 = *battery2Data;
-            Serial.printf("BATTERY2: voltage=%u\n", battery2Data->voltage);
-            break;
-        }
-        default:
-            Serial.printf("CAN unknown id=0x%03lX\n", id);
-            break;
-    }
-}
-
 void setup() {
+    pinMode(MCP2515_CS_PIN, OUTPUT);
+    digitalWrite(MCP2515_CS_PIN, HIGH);
+    pinMode(TFT_CS, OUTPUT);
+    digitalWrite(TFT_CS, HIGH);
+
     tft.init();
-    tft.setRotation(3);
+    tft.setRotation(1);
     // При setRotation(1) реальные размеры: 160x128 (ширина x высота)
     if (spr.createSprite(160, 128) != nullptr) {
         useSprite = true;
@@ -542,6 +475,11 @@ void setup() {
     pinMode(BAT1_SELECT_PIN, INPUT_PULLUP);
     pinMode(BAT2_SELECT_PIN, INPUT_PULLUP);
     tft.fillScreen(TFT_BLACK);
+
+    // Рисуем bitmap до инициализации второго устройства на общей SPI-шине.
+    tft.setSwapBytes(true);
+    tft.pushImage(0, 0, brave_w, brave_h, brave);
+    delay(5000);
 
     Serial.begin(115200);
     Serial.println("MCP2515 CAN Bus Test (physical bus)");
@@ -594,9 +532,6 @@ void setup() {
             mcp2515Dead = true;
         }
     }
-    tft.fillScreen(TFT_BLACK);
-    tft.pushImage(0, 0, 160, 128, brave);
-    delay(5000);
     tft.fillScreen(TFT_BLACK);
     drawScreen();
 }
