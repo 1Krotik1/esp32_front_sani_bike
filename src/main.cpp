@@ -70,12 +70,6 @@ bool useSprite = false; // true если спрайт создан успешн�
 // Макрос: рисовать на спрайте если он есть, иначе напрямую на tft
 #define DRAW (useSprite ? spr : tft)
 
-// --- Пороги защиты батарей (12В — 3S Li-ion) ---
-#define BAT_LOW_VOLTAGE     1050 // 10.50 В * 100 — предупреждение
-#define BAT_CRIT_VOLTAGE     900 // 9.00 В * 100 — критическое
-#define BAT_HIGH_VOLTAGE     1300  // 13.00 В * 100 — предупреждение
-#define BAT_OVER_VOLTAGE     1400  // 14.00 В * 100 — критическое
-
 // --- Цвет по статусу модуля ---
 uint32_t getStatusColor(uint8_t status) {
     if (status == INA226_OK || status == BAT_ADC_OK || status == APU_OK) return TFT_GREEN;
@@ -84,13 +78,14 @@ uint32_t getStatusColor(uint8_t status) {
     return TFT_YELLOW;
 }
 
-// --- Цвет батареи: учитывает статус ADC и напряжение ---
-uint32_t getBatteryColor(uint8_t status, uint16_t voltage) {
-    if (status == BAT_ADC_ERR_OPEN || status == BAT_ADC_ERR_OVER) return TFT_RED;
-    if (status != BAT_ADC_OK) return TFT_YELLOW;
-    if (voltage < BAT_CRIT_VOLTAGE || voltage > BAT_OVER_VOLTAGE) return TFT_RED;
-    if (voltage < BAT_LOW_VOLTAGE || voltage > BAT_HIGH_VOLTAGE) return TFT_YELLOW;
-    return TFT_GREEN;
+// --- Цвет батареи: учитывает только статусы ADC и напряжения от Nano ---
+uint32_t getBatteryColor(uint8_t adcStatus, uint8_t voltStatus) {
+    if (adcStatus == BAT_ADC_ERR_OPEN || adcStatus == BAT_ADC_ERR_OVER) return TFT_RED;
+    if (adcStatus != BAT_ADC_OK) return TFT_YELLOW;
+    if (voltStatus == BAT_VOLT_CRIT || voltStatus == BAT_VOLT_OVER) return TFT_RED;
+    if (voltStatus == BAT_VOLT_LOW  || voltStatus == BAT_VOLT_HIGH) return TFT_YELLOW;
+    if (voltStatus == BAT_VOLT_OK) return TFT_GREEN;
+    return TFT_YELLOW;
 }
 
 // --- Отрисовка индикатора батареи 1 ---
@@ -378,8 +373,8 @@ bool updateErrorDisplay() {
 void drawStaticScreen() {
     DRAW.fillScreen(TFT_BLACK);
 
-    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentBat1.voltage) : TFT_RED;
-    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentBat2.voltage) : TFT_RED;
+    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentStatus.volt_status_bat1) : TFT_RED;
+    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentStatus.volt_status_bat2) : TFT_RED;
 
     drawBattery1(bat1Color);
     drawBattery1ToMainLineVoltage(bat1Color);
@@ -407,8 +402,8 @@ void updateDynamicScreen() {
     drawMainLineCurrent(mainCurrent, mainLineColor);
 
     static uint32_t lastBat1Color = 0, lastBat2Color = 0;
-    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentBat1.voltage) : TFT_RED;
-    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentBat2.voltage) : TFT_RED;
+    uint32_t bat1Color = dataReceived ? getBatteryColor(currentStatus.status_battery1, currentStatus.volt_status_bat1) : TFT_RED;
+    uint32_t bat2Color = dataReceived ? getBatteryColor(currentStatus.status_battery2, currentStatus.volt_status_bat2) : TFT_RED;
 
     if (bat1Color != lastBat1Color) {
         drawBattery1(bat1Color);
@@ -465,6 +460,9 @@ void setup() {
     tft.init();
     tft.setRotation(1);
     // При setRotation(1) реальные размеры: 160x128 (ширина x высота)
+    tft.setSwapBytes(true);
+    tft.pushImage(0, 0, brave_w, brave_h, brave);
+    delay(5000);
     if (spr.createSprite(160, 128) != nullptr) {
         useSprite = true;
         Serial.println("Sprite created OK (160x128)");
@@ -477,9 +475,7 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
 
     // Рисуем bitmap до инициализации второго устройства на общей SPI-шине.
-    tft.setSwapBytes(true);
-    tft.pushImage(0, 0, brave_w, brave_h, brave);
-    delay(5000);
+    
 
     Serial.begin(115200);
     Serial.println("MCP2515 CAN Bus Test (physical bus)");
@@ -648,7 +644,7 @@ void loop() {
         printCanErrorFlags(errFlags);
         
     }
-// Обработка кнопок выбора батареи
+    // Обработка кнопок выбора батареи
     static uint8_t prevBat1 = 1, prevBat2 = 1;
     uint8_t curBat1 = digitalRead(BAT1_SELECT_PIN);
     uint8_t curBat2 = digitalRead(BAT2_SELECT_PIN);
@@ -663,9 +659,6 @@ void loop() {
     }
     prevBat1 = curBat1;
     prevBat2 = curBat2;
-
-    
-    
 
     delay(10);
 }
